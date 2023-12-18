@@ -12,3 +12,4 @@ keywords = ["dancing-cells", "algorithm", "exact-cover", "constraint-sat"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+comfy-table = "7.1.0"
