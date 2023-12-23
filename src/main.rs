@@ -1,8 +1,11 @@
+#![doc = include_str!("../README.md")]
+#![doc(issue_tracker_base_url = "https://github.com/recmo/dancing-cells/issues/")]
+
 mod sparse_set;
 
-use std::fmt::Display;
 use comfy_table::Table;
 use sparse_set::SparseSet;
+use std::fmt::Display;
 
 /// Exact Cover with Colors (XCC)
 /// Primary items must be covered by exactly one option.
@@ -22,8 +25,14 @@ struct DancingCells {
     itm: Vec<usize>,
     clr: Vec<Option<usize>>,
     loc: Vec<usize>,
+    sgn: Vec<bool>,
     set: Vec<usize>,
     item: Vec<usize>,
+    second: usize,
+    active: usize,
+    oactive: usize,
+    flag: bool,
+    trail: Vec<(usize, usize)>,
 }
 
 impl DancingCells {
@@ -36,7 +45,10 @@ impl DancingCells {
 
         let mut itm = itm.chars().map(|c| symbols.find(c)).collect::<Vec<_>>();
         let clr = clr.chars().map(|c| colors.find(c)).collect::<Vec<_>>();
-        let mut loc = loc.chars().map(|c| c.to_digit(10).map(|n| n as usize)).collect::<Vec<_>>();
+        let mut loc = loc
+            .chars()
+            .map(|c| c.to_digit(10).map(|n| n as usize))
+            .collect::<Vec<_>>();
 
         let mut set = vec![];
         let mut item = vec![];
@@ -65,7 +77,9 @@ impl DancingCells {
             }
         }
 
+        let mut sgn = vec![false; loc.len()];
         {
+            sgn[0] = true;
             itm[0] = Some(0);
             let mut i = 0;
             loop {
@@ -76,6 +90,7 @@ impl DancingCells {
                 i += length + 1;
                 assert!(i < loc.len());
                 itm[i] = Some(length);
+                sgn[i] = true;
             }
         }
 
@@ -83,7 +98,175 @@ impl DancingCells {
         let set = set.iter().map(|&x| x.unwrap()).collect::<Vec<_>>();
         let itm = itm.iter().map(|&x| x.unwrap()).collect::<Vec<_>>();
 
-        Self { itm, clr, loc, set, item }
+        let second = 15; // TODO
+        let active = item.len();
+        let oactive = active;
+        let flag = false;
+        Self {
+            itm,
+            clr,
+            loc,
+            set,
+            sgn,
+            item,
+            second,
+            active,
+            oactive,
+            flag,
+            trail: vec![],
+        }
+    }
+
+    pub fn check_consistency(&self) {
+        assert_eq!(self.itm.len(), self.clr.len());
+        assert_eq!(self.itm.len(), self.loc.len());
+
+        // Pos and item are inverse permutations.
+        for k in 0..self.item.len() {
+            assert_eq!(self.set[self.item[k] - 2], k, "k = {}", k);
+        }
+
+        // Loc and set are inverse permutations.
+        for item in self.item.iter().copied() {
+            let size = self.size(item);
+            for i in item..item + size {
+                assert_eq!(self.loc[self.set[i]], i);
+            }
+        }
+    }
+
+    fn solve(&mut self) {
+        // C2 Pick i
+        // TODO: Method from knuth
+        let k = 0;
+        let i = self.item[k];
+
+        // C3 Deactivate k
+        self.remove_item(k);
+
+        // C4 Hide i
+        self.oactive = self.active;
+        self.flag = false;
+        self.hide(i, None);
+
+        // C5 Trail the sizes.
+        let max_trail = 1000;
+        if self.trail.len() + self.active > max_trail {
+        }
+        self.trail.push((i, self.size(i)));
+    }
+
+    /// Hide an item and all options that contain it.
+    fn hide(&mut self, item: usize, color: Option<usize>) {
+        assert!(self.item.contains(&item));
+        let size = self.size(item);
+
+        // Iterate through all options.
+        for i in item..item + size {
+            let x = self.set[i];
+
+            // Skip options with compatible colors
+            if color.is_some() && self.clr[x] == color {
+                continue;
+            }
+
+            // Find siblings items of the option.
+            let mut xi = x;
+            loop {
+                // Advance index, looping around
+                if self.sgn[xi] {
+                    xi -= self.itm[xi];
+                } else {
+                    xi += 1;
+                }
+                // Stop if we reached the initial option
+                if xi == x {
+                    break;
+                }
+
+                // Remove the option from the item.
+                let ii = self.itm[xi];
+
+                // Skip if item is not active.
+                if self.pos(ii) >= self.oactive {
+                    continue;
+                }
+
+                // If it is the last option, there is no solution.
+                if self.size(ii) == 1
+                    && self.flag == false
+                    && ii < self.second
+                    && self.pos(ii) < self.active
+                {
+                    self.flag = true;
+                    return;
+                }
+
+                self.remove_option(ii, xi);
+            }
+        }
+    }
+
+    fn pos(&self, item: usize) -> usize {
+        assert!(self.item.contains(&item));
+        self.set[item - 2]
+    }
+
+    fn size(&self, item: usize) -> usize {
+        assert!(self.item.contains(&item));
+        self.set[item - 1]
+    }
+
+    fn iter_set(&self, item: usize) -> impl Iterator<Item = usize> + '_ {
+        assert!(self.item.contains(&item));
+        self.set[item..item + self.size(item)].iter().copied()
+    }
+
+    fn iter_items(&self) -> impl Iterator<Item = usize> + '_ {
+        self.item[..self.active].iter().copied()
+    }
+
+    fn remove_item(&mut self, k: usize) {
+        assert!(k < self.active);
+        self.active -= 1;
+        self.swap_item(k, self.active);
+    }
+
+    fn remove_option(&mut self, item: usize, k: usize) {
+        assert!(self.item.contains(&item));
+        assert!(k >= item);
+        let end = item + self.size(item);
+        assert!(k < end);
+        self.swap_option(item, k, end - 1);
+        self.set[item - 1] -= 1; // Reduce size
+    }
+
+    fn unremove_item(&mut self) {
+        self.active += 1;
+    }
+
+    fn unremove_option(&mut self, item: usize) {
+        assert!(self.item.contains(&item));
+        self.set[item - 1] += 1; // Increase size
+    }
+
+    /// Swap item entries in item preserving invariants.
+    fn swap_item(&mut self, i: usize, j: usize) {
+        assert!(i < self.item.len());
+        assert!(j < self.item.len());
+        self.item.swap(i, j);
+        self.set.swap(self.item[i] - 2, self.item[j] - 2);
+    }
+
+    /// Swap option entries in set preserving invariants.
+    fn swap_option(&mut self, item: usize, i: usize, j: usize) {
+        assert!(self.item.contains(&item));
+        let end = item + self.size(item);
+        let range = item..end;
+        assert!(range.contains(&i));
+        assert!(range.contains(&j));
+        self.set.swap(i, j);
+        self.loc.swap(self.set[i], self.set[j]);
     }
 }
 
@@ -94,7 +277,12 @@ impl Display for DancingCells {
         row.extend((0..self.itm.len()).map(|i| format!("{:2}", i)));
         table.add_row(row);
         let mut row = vec!["ITM[x]".to_owned()];
-        row.extend(self.itm.iter().map(|&i| format!("{:2}", i)));
+        row.extend(
+            self.itm
+                .iter()
+                .enumerate()
+                .map(|(i, &j)| format!("{}{j:2}", if self.sgn[i] { "-" } else { "" })),
+        );
         table.add_row(row);
         let mut row = vec!["CLR[x]".to_owned()];
         row.extend(self.clr.iter().map(|&i| match i {
@@ -103,21 +291,51 @@ impl Display for DancingCells {
         }));
         table.add_row(row);
         let mut row = vec!["LOC[x]".to_owned()];
-        row.extend(self.loc.iter().map(|&i| format!("{:2}", i)));
+        row.extend(
+            self.loc
+                .iter()
+                .enumerate()
+                .map(|(i, &j)| format!("{}{j:2}", if self.sgn[i] { "+" } else { "" })),
+        );
         table.add_row(row);
-        println!("{table}");
+        writeln!(f, "{table}")?;
 
         let mut table = Table::new();
-        table.add_row(vec!["i", "SET[i]"]);
+        let mut row = vec!["k".to_owned()];
+        row.extend((0..self.item.len()).map(|i| format!("{:2}", i)));
+        table.add_row(row);
+        let mut row = vec!["ITEM[k]".to_owned()];
+        row.extend(self.item.iter().map(|&i| format!("{:2}", i)));
+        table.add_row(row);
+        writeln!(f, "{table}")?;
+
+        writeln!(f, "SECOND = {}", self.second)?;
+        writeln!(f, "ACTIVE = {}", self.active)?;
+
+        let mut table = Table::new();
+        table.add_row(vec!["", "i", "SET[i]"]);
         {
             let mut i = 0;
             loop {
-                table.add_row(vec!["POS".to_owned(), format!("{:2}", self.set[i])]);
-                table.add_row(vec!["SIZE".to_owned(), format!("{:2}", self.set[i+1])]);
-                for i in 0..self.set[i+1] {
-                    table.add_row(vec!["".to_owned(), format!("{:2}", self.set[i+2+i])]);
+                table.add_row(vec![
+                    "POS".to_owned(),
+                    format!("{}", i),
+                    format!("{:2}", self.set[i]),
+                ]);
+                table.add_row(vec![
+                    "SIZE".to_owned(),
+                    format!("{}", i + 1),
+                    format!("{:2}", self.set[i + 1]),
+                ]);
+                for j in 0..self.set[i + 1] {
+                    let k = i + 2 + j;
+                    table.add_row(vec![
+                        "".to_owned(),
+                        format!("{}", k),
+                        format!("{:2}", self.set[k]),
+                    ]);
                 }
-                i += self.set[i+1] + 2;
+                i += self.set[i + 1] + 2;
                 if i >= self.set.len() {
                     break;
                 }
@@ -126,7 +344,6 @@ impl Display for DancingCells {
         write!(f, "{table}")
     }
 }
-
 
 fn main() {
     let mut ss = SparseSet::new(10);
@@ -169,10 +386,18 @@ fn main() {
         ],
     };
 
-    let dc = DancingCells::from_str("pqrxy", "ABC", 
-        " pqxy prxy px qx ry ", 
-        "   CA   AC  B  A  B ", 
-        "4    4    2  2  2  0"
+    let mut dc = DancingCells::from_str(
+        "pqrxy",
+        "ABC",
+        " pqxy prxy px qx ry ",
+        "   CA   AC  B  A  B ",
+        "4    4    2  2  2  0",
     );
     println!("{dc}");
+
+    dc.check_consistency();
+
+    dc.solve();
+
+    dc.check_consistency();
 }
