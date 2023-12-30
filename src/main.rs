@@ -5,7 +5,7 @@ mod sparse_set;
 
 use comfy_table::Table;
 use sparse_set::SparseSet;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 /// Exact Cover with Colors (XCC)
 /// Primary items must be covered by exactly one option.
@@ -135,7 +135,16 @@ impl DancingCells {
         }
     }
 
+    fn is_stuck(&self) -> bool {
+        self.iter_items()
+            .take(self.active)
+            .map(|i| self.size(i))
+            .any(|size| size == 0)
+    }
+
     fn solve(&mut self) {
+        dbg!(self.is_stuck());
+
         // C2 Pick i
         // TODO: Method from knuth
         let k = 0;
@@ -151,19 +160,20 @@ impl DancingCells {
 
         // C5 Trail the sizes.
         let max_trail = 1000;
-        if self.trail.len() + self.active > max_trail {
-        }
+        if self.trail.len() + self.active > max_trail {}
         self.trail.push((i, self.size(i)));
     }
 
     /// Hide an item and all options that contain it.
     fn hide(&mut self, item: usize, color: Option<usize>) {
+        dbg!(item, color);
         assert!(self.item.contains(&item));
         let size = self.size(item);
 
         // Iterate through all options.
         for i in item..item + size {
             let x = self.set[i];
+            dbg!(i, x);
 
             // Skip options with compatible colors
             if color.is_some() && self.clr[x] == color {
@@ -174,35 +184,38 @@ impl DancingCells {
             let mut xi = x;
             loop {
                 // Advance index, looping around
+                xi += 1;
                 if self.sgn[xi] {
                     xi -= self.itm[xi];
-                } else {
-                    xi += 1;
                 }
-                // Stop if we reached the initial option
+                // Stop if we reached the initial option again
                 if xi == x {
                     break;
                 }
+                dbg!(xi);
 
                 // Remove the option from the item.
                 let ii = self.itm[xi];
+                dbg!(ii);
 
                 // Skip if item is not active.
                 if self.pos(ii) >= self.oactive {
                     continue;
                 }
 
-                // If it is the last option, there is no solution.
-                if self.size(ii) == 1
-                    && self.flag == false
-                    && ii < self.second
-                    && self.pos(ii) < self.active
-                {
-                    self.flag = true;
-                    return;
-                }
+                // Early exit if it is the last option, there is no solution.
+                // if self.size(ii) == 1
+                //     && self.flag == false
+                //     && ii < self.second
+                //     && self.pos(ii) < self.active
+                // {
+                //     self.flag = true;
+                //     dbg!();
+                //     return;
+                // }
 
-                self.remove_option(ii, xi);
+                let loc = self.loc[xi];
+                self.remove_option(ii, loc);
             }
         }
     }
@@ -270,6 +283,12 @@ impl DancingCells {
     }
 }
 
+impl Debug for DancingCells {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "\n{}", self)
+    }
+}
+
 impl Display for DancingCells {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut table = Table::new();
@@ -314,32 +333,19 @@ impl Display for DancingCells {
 
         let mut table = Table::new();
         table.add_row(vec!["", "i", "SET[i]"]);
-        {
-            let mut i = 0;
-            loop {
-                table.add_row(vec![
-                    "POS".to_owned(),
-                    format!("{}", i),
-                    format!("{:2}", self.set[i]),
-                ]);
-                table.add_row(vec![
-                    "SIZE".to_owned(),
-                    format!("{}", i + 1),
-                    format!("{:2}", self.set[i + 1]),
-                ]);
-                for j in 0..self.set[i + 1] {
-                    let k = i + 2 + j;
-                    table.add_row(vec![
-                        "".to_owned(),
-                        format!("{}", k),
-                        format!("{:2}", self.set[k]),
-                    ]);
-                }
-                i += self.set[i + 1] + 2;
-                if i >= self.set.len() {
-                    break;
-                }
-            }
+        for i in 0..self.set.len() {
+            let label = if self.item.contains(&(i + 2)) {
+                "POS"
+            } else if self.item.contains(&(i + 1)) {
+                "SIZE"
+            } else {
+                ""
+            };
+            table.add_row(vec![
+                label.to_owned(),
+                format!("{}", i),
+                format!("{:2}", self.set[i]),
+            ]);
         }
         write!(f, "{table}")
     }
@@ -396,6 +402,18 @@ fn main() {
     println!("{dc}");
 
     dc.check_consistency();
+
+    dc.solve();
+
+    dc.check_consistency();
+
+    println!("{dc}");
+
+    dc.solve();
+
+    dc.check_consistency();
+
+    println!("{dc}");
 
     dc.solve();
 
