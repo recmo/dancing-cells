@@ -5,7 +5,7 @@ mod sparse_set;
 
 use comfy_table::Table;
 use sparse_set::SparseSet;
-use std::fmt::{Debug, Display};
+use std::{fmt::{Debug, Display}, num::ParseIntError};
 
 /// Exact Cover with Colors (XCC)
 /// Primary items must be covered by exactly one option.
@@ -21,6 +21,7 @@ struct Covering {
     secondary: Vec<(usize, usize)>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
 struct DancingCells {
     itm: Vec<usize>,
     clr: Vec<Option<usize>>,
@@ -33,6 +34,8 @@ struct DancingCells {
     oactive: usize,
     flag: bool,
     trail: Vec<(usize, usize)>,
+    solution: Vec<usize>,
+    indenation: String,
 }
 
 impl DancingCells {
@@ -114,6 +117,8 @@ impl DancingCells {
             oactive,
             flag,
             trail: vec![],
+            solution: vec![],
+            indenation: "".to_owned(),
         }
     }
 
@@ -135,6 +140,30 @@ impl DancingCells {
         }
     }
 
+    /// Finds an option to try, or [`None`] if stuck.
+    /// Iterates through all items and picks the first option from the item
+    /// with fewest options.
+    fn select(&self) -> Option<usize> {
+        // Find item with fewest options.
+        let item = self.iter_items()
+            .take(self.active)
+            .min_by_key(|&i| self.size(i))?;
+
+        // Pick the first option from the item.
+        let mut option = self.set[item..item + self.size(item)].iter().copied().next()?;
+
+        // Reduce to the first entry of the option.
+        while !self.sgn[option] {
+            option += 1;
+        }
+        option -= self.itm[option];
+        Some(option)
+    }
+
+    fn is_solved(&self) -> bool {
+        self.active == 0
+    }
+
     fn is_stuck(&self) -> bool {
         self.iter_items()
             .take(self.active)
@@ -142,14 +171,90 @@ impl DancingCells {
             .any(|size| size == 0)
     }
 
+    /// Recursive solver
+    fn solver(&mut self) {
+        eprintln!("{}Solver", self.indenation);
+        // dbg!(&self);
+        self.check_consistency();
+        
+        // Find an item to try all options of.
+        let Some(item) = self.iter_items()
+            .take(self.active)
+            .min_by_key(|&i| self.size(i)) else {
+                // No items left to try, we are done.
+                eprintln!("{}Solution: {:?}", self.indenation, self.solution);
+                return;
+            };
+        let size = self.size(item);
+        if size == 0 {
+            // We are stuck, backtrack.
+            eprintln!("{}Stuck", self.indenation);
+            return;
+        }        
+        let options = self.set[item..item + self.size(item)].iter().copied().collect::<Vec<_>>();
+        eprintln!("{}Exploring item {item} with options {options:?}", self.indenation);
+        self.indenation.push_str("  ");
+
+        for option in options {
+            // dbg!(&self);
+            eprintln!("{}Trying option {option}", self.indenation);
+            self.solution.push(option);
+            self.indenation.push_str("  ");
+
+            // Store sizes
+            let old_active = self.active;
+            let mut old_sizes = self.item[..self.active].iter().map(|&i| self.size(i)).collect::<Vec<_>>();
+
+            // Iterate through the option's items.
+            let size = self.loc[option - 1];
+            for i in option..option + size {
+                // Hide the item and all options that contain it.
+                let item = self.itm[i];
+                let color = self.clr[i];
+                let k = self.pos(item);
+
+                // Skip if already hidden.
+                if k >= self.active {
+                    continue;
+                }
+
+                // Hide from the item list.
+                assert!(k < self.active);
+                self.active -= 1;
+                self.swap_item(k, self.active);
+                old_sizes.swap(k, self.active);
+
+                // Hide all options that contain it.
+                self.hide(item, color);
+            }
+
+            // Recurse
+            self.solver();
+
+            // Restore sizes
+            eprintln!("{}Reverting option {option}", self.indenation);
+            self.active = old_active;
+            self.item[..self.active].iter().zip(old_sizes).for_each(|(&i, size)| self.set[i - 1] = size);
+            self.solution.pop();
+            self.indenation.pop();
+            self.indenation.pop();
+        }
+
+        eprintln!("{}Backtracking item {item}", self.indenation);
+        self.indenation.pop();
+        self.indenation.pop();
+
+        self.check_consistency();
+    }
+
     fn solve(&mut self) {
         dbg!(self.is_stuck());
 
-        // C2 Pick i
+        // C2 Pick an option i to try.
         // TODO: Method from knuth
         let k = 0;
         let i = self.item[k];
-
+        
         // C3 Deactivate k
         self.remove_item(k);
 
@@ -164,16 +269,23 @@ impl DancingCells {
         self.trail.push((i, self.size(i)));
     }
 
+    fn apply(&mut self) {
+        
+    }
+
+    fn backtrack(&mut self) {
+
+    }
+
     /// Hide an item and all options that contain it.
     fn hide(&mut self, item: usize, color: Option<usize>) {
-        dbg!(item, color);
+        eprintln!("{}Hiding item {item} colour {color:?}", self.indenation);
         assert!(self.item.contains(&item));
         let size = self.size(item);
 
         // Iterate through all options.
         for i in item..item + size {
             let x = self.set[i];
-            dbg!(i, x);
 
             // Skip options with compatible colors
             if color.is_some() && self.clr[x] == color {
@@ -192,11 +304,9 @@ impl DancingCells {
                 if xi == x {
                     break;
                 }
-                dbg!(xi);
 
                 // Remove the option from the item.
                 let ii = self.itm[xi];
-                dbg!(ii);
 
                 // Skip if item is not active.
                 if self.pos(ii) >= self.oactive {
@@ -403,19 +513,8 @@ fn main() {
 
     dc.check_consistency();
 
-    dc.solve();
-
-    dc.check_consistency();
-
-    println!("{dc}");
-
-    dc.solve();
-
-    dc.check_consistency();
-
-    println!("{dc}");
-
-    dc.solve();
+    dc.solver();
 
     dc.check_consistency();
 }
+
